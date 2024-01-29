@@ -30,17 +30,41 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
+import androidx.activity.OnBackPressedCallback
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.OnBackPressedDispatcherOwner
+import androidx.compose.foundation.background
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+
+
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
 
-            Conversation(SampleData.conversationSample)
+            AppContent()
 
         }
     }
 }
+
+
+
+
+
+
 
 data class Message(val author: String, val body: String)
 
@@ -192,4 +216,116 @@ fun PreviewConversation() {
 
     Conversation(SampleData.conversationSample)
 
+}
+
+enum class Screen {
+    Conversation,
+    Settings
+}
+@Composable
+fun AppContent() {
+    var currentView by remember { mutableStateOf<Screen>(Screen.Conversation) }
+
+    val context = LocalContext.current
+
+    // Handle Android back button press
+    DisposableEffect(currentView) {
+        val callback = object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (currentView != Screen.Conversation) {
+                    currentView = Screen.Conversation
+                } else {
+                    context?.let { ctx ->
+                        (ctx as? OnBackPressedDispatcherOwner)?.onBackPressedDispatcher?.onBackPressed()
+                    }
+                }
+            }
+        }
+        (context as? OnBackPressedDispatcherOwner)?.onBackPressedDispatcher?.addCallback(callback)
+        onDispose {
+            callback.remove()
+        }
+    }
+
+    // Display the appropriate view based on the current screen
+    when (currentView) {
+        Screen.Conversation -> {
+            ConversationView { newView -> currentView = newView }
+        }
+        Screen.Settings -> {
+            SettingsView { newView -> currentView = newView }
+        }
+    }
+}
+
+
+
+@Composable
+fun ConversationView(navigateTo: (Screen) -> Unit) {
+    LazyColumn {
+        items(SampleData.conversationSample) { message ->
+            MessageCard(message)
+        }
+        item {
+            // Add a button to navigate to SettingsView
+            NavigationButton(
+                onClick = { navigateTo(Screen.Settings) },
+                label = "Settings",
+                icon = Icons.Default.Settings
+            )
+        }
+    }
+}
+
+@Composable
+fun SettingsView(navigateTo: (Screen) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(16.dp))
+        // Add settings content here
+
+        // Add a button to go back to ConversationView
+        NavigationButton(
+            onClick = { navigateTo(Screen.Conversation) },
+            label = "Back to Conversation",
+            icon = Icons.Default.ArrowBack
+        )
+    }
+}
+
+
+@Composable
+fun NavigationButton(
+    onClick: () -> Unit,
+    label: String,
+    icon: ImageVector
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+            .background(MaterialTheme.colorScheme.primary)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(imageVector = icon, contentDescription = null, tint = Color.White)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(text = label, color = Color.White)
+    }
+}
+
+@Preview(name = "Conversation View")
+@Composable
+fun PreviewConversationView() {
+    ConversationView(navigateTo = {})
+}
+
+@Preview(name = "Settings View")
+@Composable
+fun PreviewSettingsView() {
+    SettingsView(navigateTo = {})
 }
