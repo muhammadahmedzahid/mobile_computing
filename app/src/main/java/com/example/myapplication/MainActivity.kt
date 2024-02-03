@@ -1,5 +1,6 @@
 package com.example.myapplication
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -23,6 +24,9 @@ import androidx.compose.foundation.border
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import android.content.res.Configuration
+import android.net.Uri
+import android.util.Log
+import android.webkit.MimeTypeMap
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
@@ -36,18 +40,41 @@ import androidx.compose.material3.Icon
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.OnBackPressedDispatcherOwner
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.Button
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-
-
+import androidx.compose.material.OutlinedTextField
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.room.Dao
+import androidx.room.Database
+import coil.compose.rememberAsyncImagePainter
+import androidx.room.Entity
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.PrimaryKey
+import androidx.room.Query
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import coil.compose.AsyncImagePainter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,18 +88,119 @@ class MainActivity : ComponentActivity() {
 }
 
 
+@Entity(tableName = "settings_table")
+data class SettingsEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Int = 0,
+    val text: String,
+    val imageUri: String?
+)
 
+@Dao
+interface SettingsDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertSettings(settings: SettingsEntity)
 
+    @Query("SELECT * FROM settings_table ORDER BY id DESC LIMIT 1")
+    fun getSettings(): SettingsEntity?
+}
 
+@Database(entities = [SettingsEntity::class], version = 1, exportSchema = false)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun settingsDao(): SettingsDao
+}
 
+fun copyImageToFolder(originalUri: Uri, folderName: String, context: Context): Uri? {
+    val sourceInputStream = context.contentResolver.openInputStream(originalUri)
+    val copiedUri = try {
+        val fileExtension = MimeTypeMap.getSingleton()
+            .getExtensionFromMimeType(context.contentResolver.getType(originalUri))
+        val fileName = "copied_image_${System.currentTimeMillis()}.$fileExtension"
+        val folder = File(context.filesDir, folderName)
+
+        if (!folder.exists()) {
+            folder.mkdirs()
+        }
+
+        val copiedFile = File(folder, fileName)
+        val outputStream = FileOutputStream(copiedFile)
+
+        sourceInputStream?.use { input ->
+            outputStream.use { output ->
+                input.copyTo(output)
+            }
+        }
+
+        // Return the URI of the copied image
+        Uri.fromFile(copiedFile)
+    } catch (e: Exception) {
+        Log.d("Hello","$e.printStackTrace()")
+
+        e.printStackTrace()
+
+        null
+    } finally {
+
+        sourceInputStream?.close()
+    }
+
+    return copiedUri
+}
+
+class SettingsRepository(private val settingsDao: SettingsDao) {
+    suspend fun saveSettings(text: String, imageUri: String) {
+        try {
+            val settings = SettingsEntity(text = text, imageUri = imageUri)
+            withContext(Dispatchers.IO) {
+                settingsDao.insertSettings(settings)
+            }
+            Log.d("SettingsRepository", "Settings saved successfully")
+        } catch (e: Exception) {
+            Log.e("SettingsRepository", "Error saving settings: ${e.message}", e)
+        }
+    }
+
+    suspend fun getSettings(): SettingsEntity? {
+        return withContext(Dispatchers.IO) {
+            settingsDao.getSettings()
+        }
+    }
+}
 
 data class Message(val author: String, val body: String)
 
 @Composable
-fun MessageCard(msg: Message) {
+fun MessageCard(msg: Message, settingsRepository: SettingsRepository?) {
+    var inputText by remember { mutableStateOf("") }
+    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+    LaunchedEffect(key1 = true) {
+        val existingSettings = settingsRepository?.getSettings()
+        if (existingSettings != null) {
+            inputText = existingSettings.text ?: ""
+            existingSettings.imageUri?.let { uriString ->
+                selectedImageUri = existingSettings.imageUri.let { Uri.parse(it) }
+            }
+        }
+    }
     Row(modifier = Modifier.padding(all = 8.dp)) {
+        // Use the image from the database if available, otherwise use the default image
+        val imagePainter = rememberAsyncImagePainter(model = selectedImageUri)
+        when (val state = imagePainter.state) {
+            is AsyncImagePainter.State.Success -> {
+                Log.d("ImageLoadingMain", "Image loaded successfully")
+            }
+
+            is AsyncImagePainter.State.Error -> {
+                Log.e("ImageLoadingMain", "Error loading image. Details: ${state.toString()}")
+            }
+
+            else -> {
+                // Image is still loading or in another state
+            }
+        }
+
         Image(
-            painter = painterResource(R.drawable.profile_picture),
+            painter = imagePainter,
             contentDescription = null,
             modifier = Modifier
                 .size(40.dp)
@@ -88,7 +216,7 @@ fun MessageCard(msg: Message) {
         // We toggle the isExpanded variable when we click on this Column
         Column(modifier = Modifier.clickable { isExpanded = !isExpanded }) {
             Text(
-                text = msg.author,
+                text = inputText,
                 color = MaterialTheme.colorScheme.secondary,
                 style = MaterialTheme.typography.titleSmall
             )
@@ -187,41 +315,11 @@ object SampleData {
 }
 
 
-@Preview(name = "Light Mode")
-@Preview(
-    uiMode = Configuration.UI_MODE_NIGHT_YES,
-    showBackground = true,
-    name = "Dark Mode"
-)
-@Preview
-@Composable
-fun PreviewMessageCard() {
-    MessageCard(
-        msg = Message("Lexi", "Hey, take a look at Jetpack Compose, it's great!")
-    )
-}
-
-@Composable
-fun Conversation(messages: List<Message>) {
-    LazyColumn {
-        items(messages) { message ->
-            MessageCard(message)
-        }
-    }
-}
-
-@Preview
-@Composable
-fun PreviewConversation() {
-
-    Conversation(SampleData.conversationSample)
-
-}
-
 enum class Screen {
     Conversation,
     Settings
 }
+
 @Composable
 fun AppContent() {
     var currentView by remember { mutableStateOf<Screen>(Screen.Conversation) }
@@ -241,30 +339,48 @@ fun AppContent() {
                 }
             }
         }
-        (context as? OnBackPressedDispatcherOwner)?.onBackPressedDispatcher?.addCallback(callback)
+        (context as? OnBackPressedDispatcherOwner)?.onBackPressedDispatcher?.addCallback(
+            callback
+        )
         onDispose {
             callback.remove()
         }
     }
 
     // Display the appropriate view based on the current screen
+    val appDatabase = Room.databaseBuilder(
+        context,
+        AppDatabase::class.java, "my_local_database"
+    ).build()
+
+    val settingsDao = appDatabase.settingsDao()
+    val settingsRepository = SettingsRepository(settingsDao)
     when (currentView) {
         Screen.Conversation -> {
-            ConversationView { newView -> currentView = newView }
+            ConversationView(
+                navigateTo = { newView -> currentView = newView },
+                settingsRepository = settingsRepository
+            )
         }
+
         Screen.Settings -> {
-            SettingsView { newView -> currentView = newView }
+            SettingsView(
+                navigateTo = { newView -> currentView = newView },
+                settingsRepository = settingsRepository
+            )
         }
     }
 }
 
 
-
 @Composable
-fun ConversationView(navigateTo: (Screen) -> Unit) {
+fun ConversationView(navigateTo: (Screen) -> Unit, settingsRepository: SettingsRepository) {
+    // Load existing settings when the screen is created
+    var existingSettingsState by remember { mutableStateOf<SettingsEntity?>(null) }
+
     LazyColumn {
         items(SampleData.conversationSample) { message ->
-            MessageCard(message)
+            MessageCard(message, settingsRepository)
         }
         item {
             // Add a button to navigate to SettingsView
@@ -275,10 +391,63 @@ fun ConversationView(navigateTo: (Screen) -> Unit) {
             )
         }
     }
+    // Launch a coroutine when the composable is first launched
+
+
 }
 
+
 @Composable
-fun SettingsView(navigateTo: (Screen) -> Unit) {
+fun SettingsView(navigateTo: (Screen) -> Unit, settingsRepository: SettingsRepository) {
+
+
+    var inputText by remember { mutableStateOf("") }
+    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // ActivityResultLauncher for selecting a single image
+    val pickMedia =
+        rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
+            // Callback is invoked after the user selects a media item or closes the photo picker.
+            if (uri != null) {
+                Log.d("PhotoPicker", "Selected URI: $uri")
+                selectedImageUri = uri
+                val copiedUri = copyImageToFolder(uri, "mobile_computing", context)
+                selectedImageUri = copiedUri
+                Log.d("PhotoPicker", "$copiedUri")
+            } else {
+                Log.d("PhotoPicker", "No media selected")
+            }
+        }
+    // Load existing settings when the screen is created
+    LaunchedEffect(key1 = true) {
+        val existingSettings = settingsRepository.getSettings()
+        if (existingSettings != null) {
+            inputText = existingSettings.text
+            selectedImageUri = existingSettings.imageUri?.let { Uri.parse(it) }
+
+            Log.d("selectedImageUri", selectedImageUri.toString())
+        }
+    }
+    // Save settings when the user clicks a button
+    Button(
+        onClick = {
+            selectedImageUri?.let { uri ->
+                val imageUriString = uri.toString()
+                Log.d("SavingURI:", selectedImageUri.toString())
+                coroutineScope.launch {
+                    settingsRepository.saveSettings(inputText, imageUriString)
+                }
+            }
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+    ) {
+        Text("Save Settings")
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -286,7 +455,75 @@ fun SettingsView(navigateTo: (Screen) -> Unit) {
     ) {
         Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(16.dp))
-        // Add settings content here
+
+        // Input text field
+        OutlinedTextField(
+            value = inputText,
+            onValueChange = { inputText = it },
+            label = { Text("Enter some text") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        )
+
+        Box(
+            modifier = Modifier
+                .size(100.dp)
+                .padding(16.dp)
+                .clickable {
+                    // Launch the photo picker and let the user choose images and videos.
+                    pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                }
+                .border(
+                    width = 2.dp,
+                    color = Color.Gray,
+                    shape = RoundedCornerShape(4.dp)
+                ) // Add border
+        ) {
+            // Display the selected image if available
+
+            selectedImageUri?.let { uri ->
+                Log.d("ImageLoading", "Attempting to load image from URI: $uri")
+                val imagePainter = rememberAsyncImagePainter(uri)
+                Log.d("ImagePainter", imagePainter.toString())
+
+                when (val state = imagePainter.state) {
+                    is AsyncImagePainter.State.Success -> {
+                        Log.d("ImageLoading", "Image loaded successfully")
+                    }
+
+                    is AsyncImagePainter.State.Error -> {
+                        Log.e(
+                            "ImageLoading",
+                            "Error loading image. Details: ${state.toString()}"
+                        )
+                    }
+
+                    else -> {
+                        // Image is still loading or in another state
+                    }
+                }
+
+                Image(
+                    painter = imagePainter,
+                    contentDescription = "Selected Image",
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+
+            // Show border when no image is selected
+            if (selectedImageUri == null) {
+                Log.d("No Image:", "Setting image called.$selectedImageUri")
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Gray.copy(alpha = 0.2f))
+                )
+            }
+        }
+
 
         // Add a button to go back to ConversationView
         NavigationButton(
@@ -318,14 +555,4 @@ fun NavigationButton(
     }
 }
 
-@Preview(name = "Conversation View")
-@Composable
-fun PreviewConversationView() {
-    ConversationView(navigateTo = {})
-}
 
-@Preview(name = "Settings View")
-@Composable
-fun PreviewSettingsView() {
-    SettingsView(navigateTo = {})
-}
