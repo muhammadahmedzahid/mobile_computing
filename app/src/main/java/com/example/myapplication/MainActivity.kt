@@ -1,16 +1,19 @@
 package com.example.myapplication
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Row
-import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,8 +26,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.border
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import android.content.res.Configuration
 import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.compose.foundation.lazy.LazyColumn
@@ -75,15 +79,227 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
 
-class MainActivity : ComponentActivity() {
+
+
+
+
+class MainActivity : ComponentActivity(), OrientationSensorHandler.OrientationChangeListener {
+
+    private lateinit var sensorHandler: OrientationSensorHandler
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         setContent {
-
             AppContent()
-
         }
+        // Initialize and register the sensor handler
+        sensorHandler = OrientationSensorHandler(this, this)
+
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Unregister the sensor listener when the activity is destroyed
+        sensorHandler.unregisterSensorListener()
+    }
+
+    override fun onOrientationChanged(x: Float, y: Float, z: Float) {
+        // Handle orientation changes here
+        // Now I want to publish those values into the Notification.
+        val value = "X: $x, Y: $y, Z: $z"
+        Log.d("OrientationChange", value)
+        showAppStartedNotification(this,value)
+
+    }
+
+
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        handleIntentAction(intent)
+    }
+
+    private fun handleIntentAction(intent: Intent?) {
+        if (intent?.action == "OPEN_APP_ACTION") {
+            Log.d("OpeningApp", "Stage_01")
+            val startIntent = Intent(this, MainActivity::class.java)
+            startIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(startIntent)
+        }
+    }
+}
+
+
+
+class NotificationBroadcastReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+        if (intent?.action == "SHOW_NOTIFICATION_ACTION") {
+            val value = intent.getStringExtra("orientationValue") ?: ""
+            context?.let {
+                showAppStartedNotification(it, value)
+            }
+        }
+    }
+}
+class OrientationReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+        if (intent?.action == "ORIENTATION_CHANGED_ACTION") {
+            val x = intent.getFloatExtra("x", 0.0f)
+            val y = intent.getFloatExtra("y", 0.0f)
+            val z = intent.getFloatExtra("z", 0.0f)
+            if (context != null) {
+                showAppStartedNotification(context, "X: $x, Y: $y, Z: $z")
+            }
+        }
+    }
+}
+
+
+
+
+class OrientationSensorHandler(
+    private val context: Context,
+    private val listener: OrientationChangeListener
+) : SensorEventListener {
+
+    private val sensorManager: SensorManager =
+        context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    private val accelerometer: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+
+    // Threshold to determine if the change in orientation is significant
+    private val ORIENTATION_CHANGE_THRESHOLD = 1.0f
+
+    private var lastX = 0.0f
+    private var lastY = 0.0f
+    private var lastZ = 0.0f
+
+    init {
+        registerSensorListener()
+    }
+
+    fun registerSensorListener() {
+        sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
+    }
+
+    fun unregisterSensorListener() {
+        sensorManager.unregisterListener(this)
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+        // Not needed for this example
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+            val x = event.values[0]
+            val y = event.values[1]
+            val z = event.values[2]
+
+            // Check if the change in orientation is significant
+            if (isOrientationChanged(x, y, z)) {
+                listener.onOrientationChanged(x, y, z)
+                updateLastOrientation(x, y, z)
+            }
+        }
+    }
+
+
+    private fun isOrientationChanged(x: Float, y: Float, z: Float): Boolean {
+        val deltaX = Math.abs(x - lastX)
+        val deltaY = Math.abs(y - lastY)
+        val deltaZ = Math.abs(z - lastZ)
+
+        return (deltaX > ORIENTATION_CHANGE_THRESHOLD ||
+                deltaY > ORIENTATION_CHANGE_THRESHOLD ||
+                deltaZ > ORIENTATION_CHANGE_THRESHOLD)
+    }
+
+    private fun updateLastOrientation(x: Float, y: Float, z: Float) {
+        lastX = x
+        lastY = y
+        lastZ = z
+    }
+
+    interface OrientationChangeListener {
+        fun onOrientationChanged(x: Float, y: Float, z: Float)
+    }
+
+
+}
+
+
+
+private fun showAppStartedNotification(context: Context,value:String) {
+    // Create the NotificationChannel, but only on API 26+ because
+    // the NotificationChannel class is not in the Support Library.
+    Log.d("showAppStartedNotification", "Stage_01")
+
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Log.d("showAppStartedNotification", "Stage_02")
+
+            val name = "SENSOR_CHANNEL"
+            val descriptionText = "This is description"
+            val importance = NotificationManager.IMPORTANCE_DEFAULT
+            val channel = NotificationChannel("SENSOR_NOTIFICATION_ID", name, importance).apply {
+                description = descriptionText
+            }
+            // Register the channel with the system.
+            val notificationManager: NotificationManager =
+                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
+            // Create and show a notification with a PendingIntent to open the app
+            val intent = Intent(context, MainActivity::class.java)
+            intent.action = "OPEN_APP_ACTION" // Add a custom action
+
+            val pendingIntent = PendingIntent.getActivity(
+                context, 0, intent, PendingIntent.FLAG_IMMUTABLE
+            )
+            val notificationBuilder = NotificationCompat.Builder(context, "SENSOR_NOTIFICATION_ID")
+                .setSmallIcon(R.drawable.ic_launcher_background)
+                .setContentTitle("App Started")
+                .setContentText(value)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setContentIntent(pendingIntent)
+            notificationManager.notify(1, notificationBuilder.build())
+        }
+    } catch (e: Exception) {
+        // Handle the exception here
+        Log.e("showAppStartedNotification", "Error creating notification channel: ${e.message}")
+    }
+}
+
+
+// Function to request notification permission
+fun requestNotificationPermission(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val channelId = "SENSOR_NOTIFICATION_ID"
+        val channelName = "SENSOR_CHANNEL"
+        val description = "notify you when the phone rotates."
+        val importance = NotificationManager.IMPORTANCE_HIGH
+
+        val channel = NotificationChannel(channelId, channelName, importance).apply {
+            this.description = description
+            enableVibration(true)
+        }
+
+        val notificationManager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.createNotificationChannel(channel)
+
+        // Launch system notification settings to allow the user to grant notification permission
+        val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+        intent.putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+        intent.putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, channelId)
+        context.startActivity(intent)
     }
 }
 
@@ -134,7 +350,7 @@ fun copyImageToFolder(originalUri: Uri, folderName: String, context: Context): U
         // Return the URI of the copied image
         Uri.fromFile(copiedFile)
     } catch (e: Exception) {
-        Log.d("Hello","$e.printStackTrace()")
+        Log.d("Hello", "$e.printStackTrace()")
 
         e.printStackTrace()
 
@@ -524,6 +740,27 @@ fun SettingsView(navigateTo: (Screen) -> Unit, settingsRepository: SettingsRepos
             }
         }
 
+        val notificationEnabled =
+            remember { mutableStateOf(true) } // New state for notification enable/disable
+
+        // Enable Notification button
+        Button(
+            onClick = {
+                notificationEnabled.value = !notificationEnabled.value
+                if (notificationEnabled.value) {
+                    requestNotificationPermission(context)
+                } else {
+                    // Handle notification disable logic (e.g., unregister for notifications)
+                    // Add your notification disable logic here
+                    Log.d("DisableButton Clicked:", "button")
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(if (notificationEnabled.value) "Disable Notification" else "Enable Notification")
+        }
 
         // Add a button to go back to ConversationView
         NavigationButton(
