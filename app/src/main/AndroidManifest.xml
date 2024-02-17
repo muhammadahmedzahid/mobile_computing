@@ -53,7 +53,15 @@
                 <action android:name="ORIENTATION_CHANGED_ACTION" />
             </intent-filter>
         </receiver>
-
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.example.myapplication.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 

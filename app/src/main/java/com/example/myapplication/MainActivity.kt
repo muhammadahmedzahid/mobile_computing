@@ -83,11 +83,19 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Environment
 import android.os.IBinder
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.core.app.NotificationCompat
-
-
-
+import androidx.core.content.FileProvider
+import coil.compose.rememberImagePainter
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 
 class MainActivity : ComponentActivity(), OrientationSensorHandler.OrientationChangeListener {
@@ -116,10 +124,9 @@ class MainActivity : ComponentActivity(), OrientationSensorHandler.OrientationCh
         // Now I want to publish those values into the Notification.
         val value = "X: $x, Y: $y, Z: $z"
         Log.d("OrientationChange", value)
-        showAppStartedNotification(this,value)
+        showAppStartedNotification(this, value)
 
     }
-
 
 
     override fun onNewIntent(intent: Intent?) {
@@ -138,7 +145,6 @@ class MainActivity : ComponentActivity(), OrientationSensorHandler.OrientationCh
 }
 
 
-
 class NotificationBroadcastReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
         if (intent?.action == "SHOW_NOTIFICATION_ACTION") {
@@ -149,6 +155,7 @@ class NotificationBroadcastReceiver : BroadcastReceiver() {
         }
     }
 }
+
 class OrientationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
         if (intent?.action == "ORIENTATION_CHANGED_ACTION") {
@@ -161,8 +168,6 @@ class OrientationReceiver : BroadcastReceiver() {
         }
     }
 }
-
-
 
 
 class OrientationSensorHandler(
@@ -236,8 +241,7 @@ class OrientationSensorHandler(
 }
 
 
-
-private fun showAppStartedNotification(context: Context,value:String) {
+private fun showAppStartedNotification(context: Context, value: String) {
     // Create the NotificationChannel, but only on API 26+ because
     // the NotificationChannel class is not in the Support Library.
     Log.d("showAppStartedNotification", "Stage_01")
@@ -312,6 +316,21 @@ data class SettingsEntity(
     val imageUri: String?
 )
 
+// Below code will work with the final task where I am inserting the data into the database.
+@Entity(tableName = "text_table")
+data class TextEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Int = 0,
+    val text: String
+)
+
+@Entity(tableName = "images_table")
+data class ImageEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Int = 0,
+    val imagePath: String
+)
+
 @Dao
 interface SettingsDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -321,10 +340,98 @@ interface SettingsDao {
     fun getSettings(): SettingsEntity?
 }
 
-@Database(entities = [SettingsEntity::class], version = 1, exportSchema = false)
+
+@Dao
+interface TextDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertText(textEntity: TextEntity)
+
+    @Query("SELECT * FROM text_table")
+    fun getAllText(): List<TextEntity>
+}
+
+@Dao
+interface ImageDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertImage(image: ImageEntity)
+
+    @Query("SELECT * FROM images_table")
+    fun getAllImages(): List<ImageEntity>
+}
+
+@Database(
+    entities = [SettingsEntity::class, TextEntity::class, ImageEntity::class],
+    version = 1,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun settingsDao(): SettingsDao
+    abstract fun textDao(): TextDao
+    abstract fun imageDao(): ImageDao
+
 }
+
+class SettingsRepository(private val settingsDao: SettingsDao) {
+    suspend fun saveSettings(text: String, imageUri: String) {
+        try {
+            val settings = SettingsEntity(text = text, imageUri = imageUri)
+            withContext(Dispatchers.IO) {
+                settingsDao.insertSettings(settings)
+            }
+            Log.d("SettingsRepository", "Settings saved successfully")
+        } catch (e: Exception) {
+            Log.e("SettingsRepository", "Error saving settings: ${e.message}", e)
+        }
+    }
+
+    suspend fun getSettings(): SettingsEntity? {
+        return withContext(Dispatchers.IO) {
+            settingsDao.getSettings()
+        }
+    }
+}
+
+// Getting and Saving the data into the database.
+class TextRepository(private val textDao: TextDao) {
+    suspend fun saveText(text: String) {
+        try {
+            val textEntity = TextEntity(text = text)
+            withContext(Dispatchers.IO) {
+                textDao.insertText(textEntity)
+            }
+            Log.d("TextRepository", "Text saved successfully")
+        } catch (e: Exception) {
+            Log.e("TextRepository", "Error saving text: ${e.message}", e)
+        }
+    }
+
+    suspend fun getAllText(): List<TextEntity> {
+        return withContext(Dispatchers.IO) {
+            textDao.getAllText()
+        }
+    }
+}
+
+class ImageRepository(private val imageDao: ImageDao) {
+    suspend fun saveImage(imagePath: String) {
+        try {
+            val imageEntity = ImageEntity(imagePath = imagePath)
+            withContext(Dispatchers.IO) {
+                imageDao.insertImage(imageEntity)
+            }
+            Log.d("ImageRepository", "Image saved successfully")
+        } catch (e: Exception) {
+            Log.e("ImageRepository", "Error saving image: ${e.message}", e)
+        }
+    }
+
+    suspend fun getAllImages(): List<ImageEntity> {
+        return withContext(Dispatchers.IO) {
+            imageDao.getAllImages()
+        }
+    }
+}
+
 
 fun copyImageToFolder(originalUri: Uri, folderName: String, context: Context): Uri? {
     val sourceInputStream = context.contentResolver.openInputStream(originalUri)
@@ -363,25 +470,6 @@ fun copyImageToFolder(originalUri: Uri, folderName: String, context: Context): U
     return copiedUri
 }
 
-class SettingsRepository(private val settingsDao: SettingsDao) {
-    suspend fun saveSettings(text: String, imageUri: String) {
-        try {
-            val settings = SettingsEntity(text = text, imageUri = imageUri)
-            withContext(Dispatchers.IO) {
-                settingsDao.insertSettings(settings)
-            }
-            Log.d("SettingsRepository", "Settings saved successfully")
-        } catch (e: Exception) {
-            Log.e("SettingsRepository", "Error saving settings: ${e.message}", e)
-        }
-    }
-
-    suspend fun getSettings(): SettingsEntity? {
-        return withContext(Dispatchers.IO) {
-            settingsDao.getSettings()
-        }
-    }
-}
 
 data class Message(val author: String, val body: String)
 
@@ -570,19 +658,27 @@ fun AppContent() {
     ).build()
 
     val settingsDao = appDatabase.settingsDao()
+    val texttableDao = appDatabase.textDao()
+    val imageDao = appDatabase.imageDao()
     val settingsRepository = SettingsRepository(settingsDao)
+    val textRepository = TextRepository(texttableDao)
+    val imageRepository = ImageRepository(imageDao)
     when (currentView) {
         Screen.Conversation -> {
             ConversationView(
                 navigateTo = { newView -> currentView = newView },
-                settingsRepository = settingsRepository
+                settingsRepository = settingsRepository,
+                textRepository = textRepository
+
             )
         }
 
         Screen.Settings -> {
             SettingsView(
                 navigateTo = { newView -> currentView = newView },
-                settingsRepository = settingsRepository
+                settingsRepository = settingsRepository,
+                textRepository = textRepository,
+                imageRepository = imageRepository
             )
         }
     }
@@ -590,13 +686,28 @@ fun AppContent() {
 
 
 @Composable
-fun ConversationView(navigateTo: (Screen) -> Unit, settingsRepository: SettingsRepository) {
+fun ConversationView(
+    navigateTo: (Screen) -> Unit,
+    settingsRepository: SettingsRepository,
+    textRepository: TextRepository
+) {
     // Load existing settings when the screen is created
     var existingSettingsState by remember { mutableStateOf<SettingsEntity?>(null) }
+    var textrep by remember { mutableStateOf<List<TextEntity>?>(null) }
+
+    // Fetch the inserted text from the database table.
+    LaunchedEffect(key1 = true) {
+        textrep = textRepository.getAllText()
+        Log.d("ConversationTextRepository22:", textrep.toString())
+    }
+    Log.d("ConversationTextRepository:", textrep.toString())
 
     LazyColumn {
-        items(SampleData.conversationSample) { message ->
-            MessageCard(message, settingsRepository)
+//        items(SampleData.conversationSample) { message ->
+//            MessageCard(message, settingsRepository)
+//        }
+        items(textrep ?: emptyList()) { message ->
+            MessageCard(Message("", message.text), settingsRepository)
         }
         item {
             // Add a button to navigate to SettingsView
@@ -612,15 +723,90 @@ fun ConversationView(navigateTo: (Screen) -> Unit, settingsRepository: SettingsR
 
 }
 
+// Function to create a temporary file URI
+private fun createImageUri(context: Context): Uri {
+    val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+    val imageName = "IMG_$timestamp.jpg"
+    val imagesDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+    val imageFile = File(imagesDir, imageName)
+    return FileProvider.getUriForFile(context, context.packageName + ".provider", imageFile)
+}
+
+
+
 
 @Composable
-fun SettingsView(navigateTo: (Screen) -> Unit, settingsRepository: SettingsRepository) {
+fun ImageGrid(images: List<Uri>, onItemClick: (Uri) -> Unit) {
+    val filePaths = listOf(
+        "content://com.example.myapplication.provider/external_files/Android/data/com.example.myapplication/files/Pictures/IMG_20240217_192403.jpg",
+        "file:///data/user/0/com.example.myapplication/files/mobile_computing/copied_image_1708170976169.jpg",
+        "file:///data/user/0/com.example.myapplication/files/mobile_computing/copied_image_1708170976169.jpg",
+        "file:///data/user/0/com.example.myapplication/files/mobile_computing/copied_image_1708170976169.jpg",
+        "file:///data/user/0/com.example.myapplication/files/mobile_computing/copied_image_1708170976169.jpg",
+        "file:///data/user/0/com.example.myapplication/files/mobile_computing/copied_image_1708170976169.jpg",
+        "file:///data/user/0/com.example.myapplication/files/mobile_computing/copied_image_1708170976169.jpg",
+        "file:///data/user/0/com.example.myapplication/files/mobile_computing/copied_image_1708170976169.jpg",
+        "file:///data/user/0/com.example.myapplication/files/mobile_computing/copied_image_1708170976169.jpg",
+
+        )
+    // Define your Uri class to parse the file paths
+
+    // Function to convert file paths to Uri objects
+
+    val dummy_images = filePaths.map { Uri.parse(it) }
+
+    Log.d("Images:", dummy_images.toString())
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        items(images.chunked(3)) { rowImages ->
+            Row {
+                for (image in rowImages) {
+                    ImageItem(uri = image, onItemClick = onItemClick)
+
+
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ImageItem(uri: Uri, onItemClick: (Uri) -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(125.dp)
+            .padding(4.dp)
+            .clickable { onItemClick(uri) }
+    ) {
+        // Display the image
+        val imagePainter = rememberAsyncImagePainter(uri)
+        Image(
+            painter = imagePainter,
+            contentDescription = "Selected Image",
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+}
+
+
+@Composable
+fun SettingsView(
+    navigateTo: (Screen) -> Unit,
+    settingsRepository: SettingsRepository,
+    textRepository: TextRepository,
+    imageRepository: ImageRepository
+) {
 
 
     var inputText by remember { mutableStateOf("") }
+    var inputText2 by remember { mutableStateOf("") }
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+    var imagesrep by remember { mutableStateOf<List<ImageEntity>?>(null) }
+
+
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+    var photoPath: String? = null
+    var currentPhotoPath: String? = null // Declare a variable to store the current photo path
 
     // ActivityResultLauncher for selecting a single image
     val pickMedia =
@@ -636,6 +822,25 @@ fun SettingsView(navigateTo: (Screen) -> Unit, settingsRepository: SettingsRepos
                 Log.d("PhotoPicker", "No media selected")
             }
         }
+    // Launch the camera to take a photo
+    val takePhoto =
+        rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+            if (success) {
+                // Handle photo taken successfully
+                Log.d("PhotoTaken", "Photo was taken successfully")
+                if (photoPath != null) {
+                    Log.d("PhotoPath:", photoPath.toString())
+//                    Insert the path into database.
+                    coroutineScope.launch {
+                        imageRepository.saveImage(photoPath.toString())
+                    }
+                }
+                // You may want to do something with the taken photo, like adding it to the list or saving it
+            } else {
+                // Handle failure to take photo
+                Log.d("PhotoTaken", "Failed to take photo")
+            }
+        }
     // Load existing settings when the screen is created
     LaunchedEffect(key1 = true) {
         val existingSettings = settingsRepository.getSettings()
@@ -646,29 +851,25 @@ fun SettingsView(navigateTo: (Screen) -> Unit, settingsRepository: SettingsRepos
             Log.d("selectedImageUri", selectedImageUri.toString())
         }
     }
-    // Save settings when the user clicks a button
-    Button(
-        onClick = {
-            selectedImageUri?.let { uri ->
-                val imageUriString = uri.toString()
-                Log.d("SavingURI:", selectedImageUri.toString())
-                coroutineScope.launch {
-                    settingsRepository.saveSettings(inputText, imageUriString)
-                }
-            }
-        },
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp)
-    ) {
-        Text("Save Settings")
-    }
+
+
+
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
-    ) {
+    )
+
+
+    {
+        // Add a button to go back to ConversationView
+        NavigationButton(
+            onClick = { navigateTo(Screen.Conversation) },
+            label = "Back to Conversation",
+            icon = Icons.Default.ArrowBack
+        )
+
         Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -739,7 +940,23 @@ fun SettingsView(navigateTo: (Screen) -> Unit, settingsRepository: SettingsRepos
                 )
             }
         }
-
+        // Save settings when the user clicks a button
+        Button(
+            onClick = {
+                selectedImageUri?.let { uri ->
+                    val imageUriString = uri.toString()
+                    Log.d("SavingURI:", selectedImageUri.toString())
+                    coroutineScope.launch {
+                        settingsRepository.saveSettings(inputText, imageUriString)
+                    }
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text("Save Settings")
+        }
         val notificationEnabled =
             remember { mutableStateOf(true) } // New state for notification enable/disable
 
@@ -762,12 +979,62 @@ fun SettingsView(navigateTo: (Screen) -> Unit, settingsRepository: SettingsRepos
             Text(if (notificationEnabled.value) "Disable Notification" else "Enable Notification")
         }
 
-        // Add a button to go back to ConversationView
-        NavigationButton(
-            onClick = { navigateTo(Screen.Conversation) },
-            label = "Back to Conversation",
-            icon = Icons.Default.ArrowBack
+        // Input text field
+        OutlinedTextField(
+            value = inputText2,
+            onValueChange = { inputText2 = it },
+            label = { Text("Add text into database") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
         )
+        Button(
+            onClick = {
+                Log.d("InputText2:", inputText2)
+                coroutineScope.launch {
+                    textRepository.saveText(inputText2)
+                }
+
+
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text("Save into database")
+        }
+        // Button to open camera and take photo
+        Button(
+            onClick = {
+                // Create a file URI where you want to save the captured image
+                val photoUri = createImageUri(context)
+                Log.d("Photo URI:", photoUri.toString())
+                photoPath = photoUri.toString()
+                takePhoto.launch(photoUri)
+
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text("Take Photo")
+        }
+        // Fetch the inserted text from the database table.
+        LaunchedEffect(key1 = true) {
+            imagesrep = imageRepository.getAllImages()
+            Log.d("GetAllImages:", imagesrep.toString())
+
+        }
+        val imagesList: List<Uri> = imagesrep?.map { imageEntity ->
+            Uri.parse(imageEntity.imagePath)
+        } ?: emptyList()
+        // Display grid of images
+        ImageGrid(images = imagesList) { clickedUri ->
+            // Handle click event
+            selectedImageUri = clickedUri
+        }
+
+
     }
 }
 
